@@ -38,7 +38,7 @@ import {
   parseKeywordInput,
   scoreTier,
 } from "./keywords";
-import { buildRankCheckResult, buildRankCheckTask, buildRankCheckTaskPostBody, buildSerpAnalysisTask, mapOrganicSerpItems } from "./serp";
+import { buildRankCheckResult, buildRankCheckTask, competitorEntry, competitorPosition, buildRankCheckTaskPostBody, buildSerpAnalysisTask, mapOrganicSerpItems } from "./serp";
 import {
   classifyMovement,
   changeCell,
@@ -50,6 +50,7 @@ import {
   estimateScheduledRankCheckCost,
   normalizeTrackedKeywords,
   normalizeTrackerDomain,
+  positionMetrics,
 } from "./rank-tracking";
 import { buildKeywordFilters, buildKeywordsOrderBy, buildPageFilters, computeHasMore, mapDomainOverview, mapRankedKeywordItem, mapRelevantPageItem } from "./domain";
 import {
@@ -331,8 +332,37 @@ describe("SERP + rank checks", () => {
       position: 2,
       url: "https://blog.example.com/x",
       serpFeatures: ["featured_snippet", "organic", "people_also_ask"],
+      serpHosts: {
+        "example.com": { p: null, f: ["featured_snippet"] },
+        "other.com": { p: 1 },
+        "blog.example.com": { p: 2, u: "https://blog.example.com/x" },
+      },
     });
     expect(buildRankCheckResult({ keywordId: "k1", keyword: "kw", targetDomain: "notexample.com" }, items).position).toBeNull();
+  });
+
+  it("stores the whole SERP by host: www stripped, best organic position + URL, feature types", () => {
+    const { serpHosts } = buildRankCheckResult({ keywordId: "k", keyword: "kw", targetDomain: "a.com" }, [
+      { type: "organic", domain: "www.b.com", rank_group: 4, url: "https://www.b.com/low" },
+      { type: "organic", domain: "b.com", rank_group: 2, url: "https://b.com/best" },
+      { type: "video", domain: "b.com" },
+      { type: "video", domain: "b.com" },
+      { type: "organic", domain: "google.com", rank_group: 3, url: "https://www.google.com/goto?url=https%3A%2F%2Fc.com%2Fx" },
+    ]);
+    expect(serpHosts).toEqual({ "b.com": { p: 2, u: "https://b.com/best", f: ["video"] }, "c.com": { p: 3, u: "https://www.google.com/goto?url=https%3A%2F%2Fc.com%2Fx" } });
+  });
+
+  it("matches a competitor on its domain and subdomains only, merging position, URL and features", () => {
+    const hosts = {
+      "example.com": { p: null, f: ["featured_snippet"] },
+      "blog.example.com": { p: 5, u: "https://blog.example.com/a", f: ["video"] },
+      "notexample.com": { p: 1 },
+    };
+    expect(competitorEntry(hosts, "www.Example.com")).toEqual({ p: 5, u: "https://blog.example.com/a", f: ["featured_snippet", "video"] });
+    expect(competitorPosition(hosts, "example.com")).toBe(5);
+    expect(competitorPosition({ "example.com": { p: null, f: ["video"] } }, "example.com")).toBeNull();
+    expect(competitorEntry(hosts, "other.com")).toBeNull();
+    expect(competitorEntry(null, "example.com")).toBeNull();
   });
 
   it("maps organic SERP items only", () => {
@@ -395,6 +425,18 @@ describe("SERP + rank checks", () => {
     expect(changeCell(3, 7)).toBe(4);
     expect(changeCell(null, 7)).toBe("lost");
     expect(changeCell(4, null)).toBe("new");
+  });
+
+  it("computes per-brand position metrics (visibility, avg over ranked, top 3/10)", () => {
+    const m = positionMetrics([
+      { searchVolume: 100, position: 1 },
+      { searchVolume: 100, position: null },
+      { searchVolume: 0, position: 8 },
+    ]);
+    expect(m.visibility).toBeCloseTo(50, 5);
+    expect(m.avgPosition).toBe(4.5);
+    expect(m).toMatchObject({ top3: 1, top10: 2 });
+    expect(positionMetrics([{ searchVolume: 10, position: null }])).toEqual({ visibility: 0, avgPosition: null, top3: 0, top10: 0 });
   });
 
   it("normalizes tracked keywords and domains", () => {

@@ -1,0 +1,1 @@
+ALTER TABLE "seo_rank_snapshots" ADD COLUMN "serp_hosts" jsonb;

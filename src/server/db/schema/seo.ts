@@ -264,6 +264,9 @@ export const seoRankRuns = pgTable(
   ],
 );
 
+/** Per SERP host: best organic position, its URL and the SERP feature types it appears in. */
+export type SerpHostEntry = { p: number | null; u?: string; f?: string[] };
+
 export const seoRankSnapshots = pgTable(
   "seo_rank_snapshots",
   {
@@ -279,6 +282,8 @@ export const seoRankSnapshots = pgTable(
     position: integer(),
     url: text(),
     serpFeatures: jsonb().$type<string[]>().notNull().default([]),
+    /** Whole fetched SERP by host (www-stripped); null on snapshots from before competitor tracking. */
+    serpHosts: jsonb().$type<Record<string, SerpHostEntry>>(),
     /** "ai" = AI-observed position (web search, depth ≤ 20). */
     source: text({ enum: ["dataforseo", "ai"] }).notNull().default("dataforseo"),
     checkedAt: ts().notNull().defaultNow(),

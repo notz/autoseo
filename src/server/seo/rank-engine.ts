@@ -102,12 +102,13 @@ async function insertSnapshots(runId: string, results: (RankCheckResult & { devi
         position: r.position,
         url: r.url,
         serpFeatures: r.serpFeatures,
+        serpHosts: r.serpHosts,
       })),
     )
     // A second read only replaces a miss, or a worse position, with a better one.
     .onConflictDoUpdate({
       target: [seoRankSnapshots.runId, seoRankSnapshots.trackingKeywordId, seoRankSnapshots.device],
-      set: { position: sql`excluded.position`, url: sql`excluded.url`, serpFeatures: sql`excluded.serp_features` },
+      set: { position: sql`excluded.position`, url: sql`excluded.url`, serpFeatures: sql`excluded.serp_features`, serpHosts: sql`excluded.serp_hosts` },
       setWhere: sql`excluded.position IS NOT NULL AND (${seoRankSnapshots.position} IS NULL OR excluded.position < ${seoRankSnapshots.position})`,
     });
 }

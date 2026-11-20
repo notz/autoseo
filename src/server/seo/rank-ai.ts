@@ -112,6 +112,7 @@ export async function checkPairsViaAi(ctx: SeoContext, run: RankRun, config: Ran
           position: r.position,
           url: r.url,
           serpFeatures: r.serpFeatures,
+          serpHosts: r.serpHosts,
           source: "ai" as const,
         })),
       )

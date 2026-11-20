@@ -63,6 +63,7 @@ import { CheckConfirmModal } from "./check-confirm-modal";
 import { KeywordTrendModal } from "./keyword-trend-modal";
 import { PositionDistribution } from "./position-distribution";
 import { HistoryMatrix, type MatrixData } from "./history-matrix";
+import { RankCompetitorsView } from "./rank-competitors-view";
 import { buildRankExport, RankTable } from "./rank-table";
 import { configFlag, configLocationLabel, formatShortDate, skipReasonMessage, type ConfigLike } from "./rank-utils";
 import { cn } from "@/lib/utils";
@@ -126,6 +127,7 @@ export function RankDetailView({
   const compare: ComparePeriod = compareParam && COMPARE_PERIODS.includes(compareParam) ? compareParam : defaultComparePeriod(config.scheduleInterval);
   const device: Device = config.devices === "both" ? (params.get("device") === "mobile" ? "mobile" : "desktop") : config.devices;
   const view = params.get("view") === "history" ? "history" : "latest";
+  const tab = params.get("tab") === "competitors" ? "competitors" : "overview";
   const range = params.get("range") ?? "all";
   const filterValues: FilterValues = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""]));
   const activeFilters = Object.values(filterValues).filter(Boolean).length;
@@ -401,147 +403,181 @@ export function RankDetailView({
         }}
       />
 
-      {rows.length > 0 && <KpiStrip items={kpis} />}
+      <div className="flex gap-1 border-b" role="tablist" aria-label="Rank tracking view">
+        {(["overview", "competitors"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => set({ tab: t === "overview" ? null : t })}
+            className={cn(
+              "-mb-px border-b-2 px-3 py-2.5 text-sm whitespace-nowrap capitalize transition-colors",
+              tab === t ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
 
-      {rows.length > 0 && (
-        <PositionDistribution projectId={projectId} configId={config.id} device={device} version={version} range={range} onRangeChange={(r) => set({ range: r === "all" ? null : r })} />
+      {tab === "competitors" && (
+        <RankCompetitorsView
+          projectId={projectId}
+          config={config}
+          rows={rows}
+          device={device}
+          compare={compare}
+          version={version}
+          onKeywordClick={(r) => setTrendKeyword({ id: r.trackingKeywordId, keyword: r.keyword })}
+        />
       )}
 
-      <Panel contentClassName="p-3 sm:p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {completedRuns >= 2 && (
-            <div className="flex rounded-lg bg-muted p-0.5">
-              <button
-                type="button"
-                onClick={() => set({ view: null })}
-                className={cn("flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium", effectiveView === "latest" ? "bg-background shadow-xs" : "text-muted-foreground")}
-              >
-                <List className="size-3.5" /> Latest
-              </button>
-              <button
-                type="button"
-                onClick={() => set({ view: "history" })}
-                className={cn("flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium", effectiveView === "history" ? "bg-background shadow-xs" : "text-muted-foreground")}
-              >
-                <History className="size-3.5" /> History
-              </button>
-            </div>
-          )}
-          <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeFilters} />
-          {active ? (
-            <div className="flex min-w-48 flex-1 items-center gap-2 text-xs text-muted-foreground sm:max-w-sm">
-              <Loader2 className="size-3.5 shrink-0 animate-spin" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate">{runProgressLabel(active)}</div>
-                {active.status === "running" && active.keywordsTotal > 0 && <Progress value={(active.keywordsChecked / active.keywordsTotal) * 100} className="mt-1" />}
+      {tab === "overview" && (
+        <>
+        {rows.length > 0 && <KpiStrip items={kpis} />}
+
+        {rows.length > 0 && (
+          <PositionDistribution projectId={projectId} configId={config.id} device={device} version={version} range={range} onRangeChange={(r) => set({ range: r === "all" ? null : r })} />
+        )}
+
+        <Panel contentClassName="p-3 sm:p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {completedRuns >= 2 && (
+              <div className="flex rounded-lg bg-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => set({ view: null })}
+                  className={cn("flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium", effectiveView === "latest" ? "bg-background shadow-xs" : "text-muted-foreground")}
+                >
+                  <List className="size-3.5" /> Latest
+                </button>
+                <button
+                  type="button"
+                  onClick={() => set({ view: "history" })}
+                  className={cn("flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium", effectiveView === "history" ? "bg-background shadow-xs" : "text-muted-foreground")}
+                >
+                  <History className="size-3.5" /> History
+                </button>
               </div>
+            )}
+            <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen((o) => !o)} active={activeFilters} />
+            {active ? (
+              <div className="flex min-w-48 flex-1 items-center gap-2 text-xs text-muted-foreground sm:max-w-sm">
+                <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{runProgressLabel(active)}</div>
+                  {active.status === "running" && active.keywordsTotal > 0 && <Progress value={(active.keywordsChecked / active.keywordsTotal) * 100} className="mt-1" />}
+                </div>
+              </div>
+            ) : (
+              (loadingResults || metricsJob) && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="hidden text-xs text-muted-foreground tabular sm:inline">
+                {rows.length.toLocaleString()} keyword{rows.length === 1 ? "" : "s"}
+              </span>
+              <ExportMenu
+                getData={exportAll}
+                disabled={rows.length === 0}
+                extra={
+                  <DropdownMenuItem onSelect={() => copyText(filteredRows.map((r) => r.keyword).join("\n"), `Copied ${filteredRows.length} keywords`)}>
+                    <ClipboardCopy /> Copy keywords
+                  </DropdownMenuItem>
+                }
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 gap-1" aria-label="More actions">
+                    <MoreHorizontal className="size-3.5" />
+                    <ChevronDown className="size-3 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72">
+                  <DropdownMenuItem disabled={!canCheck || Boolean(active) || rows.length === 0} onSelect={requestCheck} className="flex-col items-start gap-0">
+                    <span className="flex items-center gap-2 font-medium">
+                      <Play className="size-3.5" /> Check rankings
+                    </span>
+                    <span className="pl-5.5 text-xs text-muted-foreground">Fetch current Google positions</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={!canCheck || Boolean(metricsJob) || rows.length === 0} onSelect={refreshMetrics} className="flex-col items-start gap-0">
+                    <span className="flex items-center gap-2 font-medium">
+                      <RefreshCw className="size-3.5" /> Update keyword stats
+                    </span>
+                    <span className="pl-5.5 text-xs text-muted-foreground">Volume, difficulty & CPC — not rankings</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
-          ) : (
-            (loadingResults || metricsJob) && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-          )}
-          <div className="ml-auto flex items-center gap-2">
-            <span className="hidden text-xs text-muted-foreground tabular sm:inline">
-              {rows.length.toLocaleString()} keyword{rows.length === 1 ? "" : "s"}
-            </span>
-            <ExportMenu
-              getData={exportAll}
-              disabled={rows.length === 0}
-              extra={
-                <DropdownMenuItem onSelect={() => copyText(filteredRows.map((r) => r.keyword).join("\n"), `Copied ${filteredRows.length} keywords`)}>
-                  <ClipboardCopy /> Copy keywords
-                </DropdownMenuItem>
-              }
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1" aria-label="More actions">
-                  <MoreHorizontal className="size-3.5" />
-                  <ChevronDown className="size-3 opacity-60" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72">
-                <DropdownMenuItem disabled={!canCheck || Boolean(active) || rows.length === 0} onSelect={requestCheck} className="flex-col items-start gap-0">
-                  <span className="flex items-center gap-2 font-medium">
-                    <Play className="size-3.5" /> Check rankings
-                  </span>
-                  <span className="pl-5.5 text-xs text-muted-foreground">Fetch current Google positions</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={!canCheck || Boolean(metricsJob) || rows.length === 0} onSelect={refreshMetrics} className="flex-col items-start gap-0">
-                  <span className="flex items-center gap-2 font-medium">
-                    <RefreshCw className="size-3.5" /> Update keyword stats
-                  </span>
-                  <span className="pl-5.5 text-xs text-muted-foreground">Volume, difficulty & CPC — not rankings</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
-        </div>
 
-        <FilterPanel
-          open={filtersOpen}
-          mode="live"
-          values={filterValues}
-          onApply={(v) => set(v)}
-          textFields={[
-            { key: "inc", label: "Include terms", placeholder: "e.g. seo, tool" },
-            { key: "exc", label: "Exclude terms", placeholder: "e.g. free, cheap" },
-          ]}
-          rangeFields={[
-            ...(config.devices !== "mobile" ? [{ label: "Desktop position", minKey: "dMin", maxKey: "dMax", min: 1 }] : []),
-            ...(config.devices !== "desktop" ? [{ label: "Mobile position", minKey: "mMin", maxKey: "mMax", min: 1 }] : []),
-            { label: "Volume", minKey: "vMin", maxKey: "vMax", min: 0 },
-            { label: "KD", minKey: "kMin", maxKey: "kMax", min: 0, max: 100 },
-            { label: "CPC (USD)", minKey: "cMin", maxKey: "cMax", step: 0.01, min: 0 },
-          ]}
-        />
+          <FilterPanel
+            open={filtersOpen}
+            mode="live"
+            values={filterValues}
+            onApply={(v) => set(v)}
+            textFields={[
+              { key: "inc", label: "Include terms", placeholder: "e.g. seo, tool" },
+              { key: "exc", label: "Exclude terms", placeholder: "e.g. free, cheap" },
+            ]}
+            rangeFields={[
+              ...(config.devices !== "mobile" ? [{ label: "Desktop position", minKey: "dMin", maxKey: "dMax", min: 1 }] : []),
+              ...(config.devices !== "desktop" ? [{ label: "Mobile position", minKey: "mMin", maxKey: "mMax", min: 1 }] : []),
+              { label: "Volume", minKey: "vMin", maxKey: "vMax", min: 0 },
+              { label: "KD", minKey: "kMin", maxKey: "kMax", min: 0, max: 100 },
+              { label: "CPC (USD)", minKey: "cMin", maxKey: "cMax", step: 0.01, min: 0 },
+            ]}
+          />
 
-        <div className="mt-3">
-          {effectiveView === "history" ? (
-            <HistoryMatrix
-              data={matrix.data}
-              loading={matrix.loading}
-              keywords={filteredRows.map((r) => ({ id: r.trackingKeywordId, keyword: r.keyword }))}
-              onKeywordClick={setTrendKeyword}
-            />
-          ) : (
-            <RankTable
-              config={config}
-              rows={filteredRows}
-              totalCount={rows.length}
-              device={device}
-              selectable={info.canRun}
-              selected={selected}
-              onSelectedChange={setSelected}
-              onKeywordClick={(r) => setTrendKeyword({ id: r.trackingKeywordId, keyword: r.keyword })}
-              filtered={activeFilters > 0 && rows.length > 0}
-            />
-          )}
-        </div>
-      </Panel>
+          <div className="mt-3">
+            {effectiveView === "history" ? (
+              <HistoryMatrix
+                data={matrix.data}
+                loading={matrix.loading}
+                keywords={filteredRows.map((r) => ({ id: r.trackingKeywordId, keyword: r.keyword }))}
+                onKeywordClick={setTrendKeyword}
+              />
+            ) : (
+              <RankTable
+                config={config}
+                rows={filteredRows}
+                totalCount={rows.length}
+                device={device}
+                selectable={info.canRun}
+                selected={selected}
+                onSelectedChange={setSelected}
+                onKeywordClick={(r) => setTrendKeyword({ id: r.trackingKeywordId, keyword: r.keyword })}
+                filtered={activeFilters > 0 && rows.length > 0}
+              />
+            )}
+          </div>
+        </Panel>
 
-      <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
-        <ExportMenu getData={() => ({ ...buildRankExport(config, selectedRows), filename: `rank-tracking-${fileSafe(config.domain)}-selected` })} />
-        <ConfirmButton
-          title="Remove keywords?"
-          description={`This will stop tracking ${selected.size} keyword${selected.size === 1 ? "" : "s"}. Historical ranking data is preserved but won't appear in the table.`}
-          confirmLabel="Remove"
-          destructive
-          onConfirm={async () => {
-            try {
-              const res = unwrap(await removeTrackingKeywordsAction(projectId, config.id, [...selected]));
-              toast.success(`Removed ${res.removed} keyword${res.removed === 1 ? "" : "s"}`);
-              setSelected(new Set());
-              void loadResults(compare);
-            } catch (err) {
-              toastError(err);
-            }
-          }}
-        >
-          <Button size="sm" variant="destructive">
-            <Trash2 /> Remove
-          </Button>
-        </ConfirmButton>
-      </BulkBar>
+        <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
+          <ExportMenu getData={() => ({ ...buildRankExport(config, selectedRows), filename: `rank-tracking-${fileSafe(config.domain)}-selected` })} />
+          <ConfirmButton
+            title="Remove keywords?"
+            description={`This will stop tracking ${selected.size} keyword${selected.size === 1 ? "" : "s"}. Historical ranking data is preserved but won't appear in the table.`}
+            confirmLabel="Remove"
+            destructive
+            onConfirm={async () => {
+              try {
+                const res = unwrap(await removeTrackingKeywordsAction(projectId, config.id, [...selected]));
+                toast.success(`Removed ${res.removed} keyword${res.removed === 1 ? "" : "s"}`);
+                setSelected(new Set());
+                void loadResults(compare);
+              } catch (err) {
+                toastError(err);
+              }
+            }}
+          >
+            <Button size="sm" variant="destructive">
+              <Trash2 /> Remove
+            </Button>
+          </ConfirmButton>
+        </BulkBar>
+        </>
+      )}
 
       <CheckConfirmModal
         open={confirmOpen}

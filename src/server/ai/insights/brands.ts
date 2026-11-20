@@ -42,12 +42,24 @@ export const UNTRACKED_COLOR = "#94a3b8";
 
 type ProjectRow = typeof projects.$inferSelect;
 
+/** Stored hex colour, else a stable palette colour by position in `createdAt, name` order. */
+function competitorColor(c: { color: string | null }, i: number): string {
+  return c.color && /^#[0-9a-f]{3,8}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length]!;
+}
+
+async function listCompetitors(projectId: string) {
+  return db.select().from(competitors).where(eq(competitors.projectId, projectId)).orderBy(asc(competitors.createdAt), asc(competitors.name));
+}
+
+/** "My List" competitors with a domain (what rank tracking can match in a SERP), colours as in AI Visibility. */
+export async function getTrackedCompetitorBrands(projectId: string) {
+  const all = await listCompetitors(projectId);
+  const withDomain = all.flatMap((c, i) => (c.tracked && c.domain ? [{ key: c.id, name: c.name, domain: c.domain, color: competitorColor(c, i) }] : []));
+  return { brands: withDomain, skippedNoDomain: all.filter((c) => c.tracked && !c.domain).map((c) => c.name) };
+}
+
 export async function getBrands(project: ProjectRow): Promise<BrandInfo[]> {
-  const rowsC = await db
-    .select()
-    .from(competitors)
-    .where(eq(competitors.projectId, project.id))
-    .orderBy(asc(competitors.createdAt), asc(competitors.name));
+  const rowsC = await listCompetitors(project.id);
   const own: BrandInfo = {
     key: OWN_KEY,
     competitorId: null,
@@ -69,7 +81,7 @@ export async function getBrands(project: ProjectRow): Promise<BrandInfo[]> {
       name: c.name,
       domain: c.domain,
       aliases: c.aliases ?? [],
-      color: c.color && /^#[0-9a-f]{3,8}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length]!,
+      color: competitorColor(c, i),
       tracked: c.tracked,
       source: c.source,
       logoUrl: c.logoUrl,

@@ -23,7 +23,10 @@ import {
   MAX_TRACKED_KEYWORD_LENGTH,
   normalizeTrackedKeywords,
   normalizeTrackerDomain,
+  positionMetrics,
   RANK_CHECK_STARTUP_GRACE_MS,
+  type CompetitorMetric,
+  type PositionMetrics,
   type ComparePeriod,
   type RankDevices,
   type ScheduleInterval,
@@ -31,6 +34,8 @@ import {
 import { getIsoCountryCode, isLabsLocationCode, isSupportedLanguageCode, resolveMarket } from "./lib/locations";
 import { rankSerpLocations, slimLocationRegistry, type SerpLocation } from "./lib/serp-locations";
 import { isValidDomainHost } from "./lib/research-scope";
+import { competitorPosition, type SerpHostEntry } from "./lib/serp";
+import { getTrackedCompetitorBrands, OWN_COLOR } from "@/server/ai/insights/brands";
 
 export const RANK_CHECK_JOB = "seo.rank-check";
 export const RANK_COLLECT_JOB = "seo.rank-collect";
@@ -515,12 +520,30 @@ type SnapshotRow = {
   serp_features: string[] | null;
   checked_at: Date | string;
   source: "dataforseo" | "ai";
+  /** Only present when `hostDomains` was requested; null = snapshot predates competitor tracking. */
+  serp_hosts?: Record<string, SerpHostEntry> | null;
 };
 
-async function snapshotsPerKeywordDevice(configId: string, opts: { before?: Date; order: "latest" | "earliest"; keywordIds?: string[] }) {
+/**
+ * `serp_hosts` reduced to the given domains and their subdomains (keeps null as null), so the whole SERP never
+ * leaves the database when only competitors are needed.
+ */
+function hostsOf(col: ReturnType<typeof sql>, domains: string[]) {
+  const match = sql.join(
+    domains.map((d) => sql`e.key = ${d} OR right(e.key, ${d.length + 1}) = ${"." + d}`),
+    sql` OR `,
+  );
+  return sql`CASE WHEN ${col} IS NULL THEN NULL ELSE (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each(${col}) e WHERE ${match}) END`;
+}
+
+async function snapshotsPerKeywordDevice(
+  configId: string,
+  opts: { before?: Date; order: "latest" | "earliest"; keywordIds?: string[]; hostDomains?: string[] },
+) {
+  const hosts = opts.hostDomains?.length ? sql`, ${hostsOf(sql`s.serp_hosts`, opts.hostDomains)} AS serp_hosts` : sql``;
   const rows = await db.execute(sql`
     SELECT DISTINCT ON (s.tracking_keyword_id, s.device)
-      s.tracking_keyword_id, s.device, s.position, s.url, s.serp_features, s.checked_at, s.source
+      s.tracking_keyword_id, s.device, s.position, s.url, s.serp_features, s.checked_at, s.source${hosts}
     FROM ${seoRankSnapshots} s
     JOIN ${seoRankRuns} r ON r.id = s.run_id
     WHERE r.config_id = ${configId} AND r.status = 'completed'
@@ -528,6 +551,21 @@ async function snapshotsPerKeywordDevice(configId: string, opts: { before?: Date
       ${opts.keywordIds?.length ? sql`AND s.tracking_keyword_id IN (${sql.join(opts.keywordIds.map((id) => sql`${id}`), sql`, `)})` : sql``}
     ORDER BY s.tracking_keyword_id, s.device, s.checked_at ${opts.order === "latest" ? sql`DESC` : sql`ASC`}`);
   return rows as unknown as SnapshotRow[];
+}
+
+/** Comparison snapshot per keyword+device: the latest one before the period, else the earliest ever. */
+async function previousSnapshots(configId: string, comparison: SnapshotRow[], current: SnapshotRow[], hostDomains?: string[]) {
+  const previous = new Map<string, SnapshotRow>();
+  for (const s of comparison) previous.set(`${s.tracking_keyword_id}:${s.device}`, s);
+  const missing = [...new Set(current.filter((s) => !previous.has(`${s.tracking_keyword_id}:${s.device}`)).map((s) => s.tracking_keyword_id))];
+  for (let i = 0; i < missing.length; i += 500) {
+    const earliest = await snapshotsPerKeywordDevice(configId, { order: "earliest", keywordIds: missing.slice(i, i + 500), hostDomains });
+    for (const s of earliest) {
+      const k = `${s.tracking_keyword_id}:${s.device}`;
+      if (!previous.has(k)) previous.set(k, s);
+    }
+  }
+  return previous;
 }
 
 export type RankDeviceResult = {
@@ -565,18 +603,7 @@ export async function getRankTrackingResults(ctx: SeoContext, configId: string, 
     snapshotsPerKeywordDevice(config.id, { order: "latest", before: target }),
     db.select().from(seoRankRuns).where(eq(seoRankRuns.configId, config.id)).orderBy(desc(seoRankRuns.startedAt)).limit(1),
   ]);
-  const previous = new Map<string, number | null>();
-  for (const s of comparison) previous.set(`${s.tracking_keyword_id}:${s.device}`, s.position);
-  const missing = [...new Set(current.filter((s) => !previous.has(`${s.tracking_keyword_id}:${s.device}`)).map((s) => s.tracking_keyword_id))];
-  if (missing.length) {
-    for (let i = 0; i < missing.length; i += 500) {
-      const earliest = await snapshotsPerKeywordDevice(config.id, { order: "earliest", keywordIds: missing.slice(i, i + 500) });
-      for (const s of earliest) {
-        const k = `${s.tracking_keyword_id}:${s.device}`;
-        if (!previous.has(k)) previous.set(k, s.position);
-      }
-    }
-  }
+  const previous = await previousSnapshots(config.id, comparison, current);
   const empty = (prev: number | null): RankDeviceResult => ({ position: null, previousPosition: prev, rankingUrl: null, serpFeatures: [], source: "dataforseo" });
   const rows = new Map<string, RankTrackingRow>(
     keywords.map((k) => [
@@ -590,8 +617,8 @@ export async function getRankTrackingResults(ctx: SeoContext, configId: string, 
         cpc: k.cpc,
         metricsFetchedAt: k.metricsFetchedAt,
         metricsSource: k.metricsSource,
-        desktop: empty(previous.get(`${k.id}:desktop`) ?? null),
-        mobile: empty(previous.get(`${k.id}:mobile`) ?? null),
+        desktop: empty(previous.get(`${k.id}:desktop`)?.position ?? null),
+        mobile: empty(previous.get(`${k.id}:mobile`)?.position ?? null),
       },
     ]),
   );
@@ -601,7 +628,7 @@ export async function getRankTrackingResults(ctx: SeoContext, configId: string, 
     if (!row) continue;
     row[s.device] = {
       position: s.position,
-      previousPosition: previous.get(`${s.tracking_keyword_id}:${s.device}`) ?? null,
+      previousPosition: previous.get(`${s.tracking_keyword_id}:${s.device}`)?.position ?? null,
       rankingUrl: s.url,
       serpFeatures: Array.isArray(s.serp_features) ? s.serp_features : [],
       source: s.source === "ai" ? "ai" : "dataforseo",
@@ -617,12 +644,119 @@ export async function getRankTrackingResults(ctx: SeoContext, configId: string, 
   };
 }
 
+const normHost = (d: string) => d.toLowerCase().replace(/^www\./, "");
+
+export type RankBrand = { key: string; name: string; domain: string; color: string; isOwn: boolean };
+export type CompetitorPosition = { position: number | null; /** undefined = no comparison data (snapshot predates competitor tracking). */ previousPosition: number | null | undefined };
+export type RankCompetitorData = {
+  /** Own domain first, then My List competitors that have a domain. */
+  brands: RankBrand[];
+  skippedNoDomain: string[];
+  /** False until a check has stored the SERP (competitor columns would be empty). */
+  hasCompetitorData: boolean;
+  rows: { trackingKeywordId: string; positions: Record<string, CompetitorPosition> }[];
+  /** Completed full runs, oldest first. */
+  dates: string[];
+  series: Record<string, Record<CompetitorMetric, (number | null)[]>>;
+  latest: Record<string, PositionMetrics>;
+};
+
+const TREND_RUNS = 12;
+
+/** Competitor columns + trend for one device: own position from the snapshot, competitors matched in the stored SERP hosts. */
+export async function getRankCompetitorData(
+  ctx: SeoContext,
+  configId: string,
+  device: "desktop" | "mobile",
+  comparePeriod: ComparePeriod = "7d",
+): Promise<RankCompetitorData> {
+  const config = await getConfig(ctx, configId);
+  const { brands: competitors, skippedNoDomain } = await getTrackedCompetitorBrands(ctx.projectId);
+  const brands: RankBrand[] = [
+    { key: "own", name: config.domain, domain: config.domain, color: OWN_COLOR, isOwn: true },
+    ...competitors.map((c) => ({ ...c, domain: normHost(c.domain), isOwn: false })),
+  ];
+  const hostDomains = brands.slice(1).map((b) => b.domain);
+  const positionOf = (b: RankBrand, snap: SnapshotRow): number | null | undefined =>
+    b.isOwn ? snap.position : snap.serp_hosts ? competitorPosition(snap.serp_hosts, b.domain) : undefined;
+
+  const target = new Date(Date.now() - COMPARE_PERIOD_DAYS[comparePeriod] * 86_400_000);
+  const [keywords, current, comparison, runs] = await Promise.all([
+    getConfigKeywords(config.id),
+    snapshotsPerKeywordDevice(config.id, { order: "latest", hostDomains }),
+    snapshotsPerKeywordDevice(config.id, { order: "latest", before: target, hostDomains }),
+    db
+      .select({ id: seoRankRuns.id, startedAt: seoRankRuns.startedAt })
+      .from(seoRankRuns)
+      .where(and(eq(seoRankRuns.configId, config.id), eq(seoRankRuns.status, "completed"), eq(seoRankRuns.isSubsetRun, false)))
+      .orderBy(desc(seoRankRuns.startedAt))
+      .limit(TREND_RUNS),
+  ]);
+  const previous = await previousSnapshots(config.id, comparison, current, hostDomains);
+
+  const rows = current
+    .filter((s) => s.device === device)
+    .map((s) => {
+      const prev = previous.get(`${s.tracking_keyword_id}:${s.device}`);
+      const positions: Record<string, CompetitorPosition> = {};
+      for (const b of brands) {
+        const position = positionOf(b, s);
+        // Own: unknown position can't happen; competitors: undefined (no SERP stored) shows as no data.
+        const before = prev ? positionOf(b, prev) : b.isOwn ? null : undefined;
+        positions[b.key] = { position: position ?? null, previousPosition: position === undefined ? undefined : before };
+      }
+      return { trackingKeywordId: s.tracking_keyword_id, positions };
+    });
+  const hasCompetitorData = current.some((s) => s.device === device && s.serp_hosts != null);
+
+  // Trend: per completed full run, metrics over the currently tracked keywords.
+  const volume = new Map(keywords.map((k) => [k.id, k.searchVolume]));
+  const ordered = [...runs].reverse();
+  const cells = ordered.length
+    ? ((await db.execute(sql`
+        SELECT s.run_id, s.tracking_keyword_id, s.position, ${hostDomains.length ? hostsOf(sql`s.serp_hosts`, hostDomains) : sql`NULL::jsonb`} AS serp_hosts
+        FROM ${seoRankSnapshots} s
+        WHERE s.device = ${device} AND s.run_id IN (${sql.join(ordered.map((r) => sql`${r.id}`), sql`, `)})`)) as unknown as {
+        run_id: string;
+        tracking_keyword_id: string;
+        position: number | null;
+        serp_hosts: Record<string, SerpHostEntry> | null;
+      }[])
+    : [];
+  const byRun = new Map<string, typeof cells>();
+  for (const c of cells) if (volume.has(c.tracking_keyword_id)) byRun.set(c.run_id, [...(byRun.get(c.run_id) ?? []), c]);
+  const METRICS: CompetitorMetric[] = ["visibility", "avgPosition", "top3", "top10"];
+  const series = Object.fromEntries(brands.map((b) => [b.key, { visibility: [], avgPosition: [], top3: [], top10: [] }])) as RankCompetitorData["series"];
+  const empty: PositionMetrics = { visibility: null, avgPosition: null, top3: null, top10: null };
+  for (const r of ordered) {
+    const snaps = byRun.get(r.id) ?? [];
+    for (const b of brands) {
+      const rowsB = snaps.flatMap((c) => {
+        const position = b.isOwn ? c.position : c.serp_hosts ? competitorPosition(c.serp_hosts, b.domain) : undefined;
+        return position === undefined ? [] : [{ searchVolume: volume.get(c.tracking_keyword_id) ?? null, position }];
+      });
+      const m = rowsB.length ? positionMetrics(rowsB) : empty;
+      for (const k of METRICS) series[b.key]![k].push(m[k]);
+    }
+  }
+  const latest = Object.fromEntries(brands.map((b) => [b.key, Object.fromEntries(METRICS.map((k) => [k, series[b.key]![k].at(-1) ?? null]))])) as RankCompetitorData["latest"];
+  return { brands, skippedNoDomain, hasCompetitorData, rows, dates: ordered.map((r) => r.startedAt.toISOString()), series, latest };
+}
+
 /** Flat position series across completed runs (oldest first); null = not found within depth. */
 export async function getRankKeywordHistory(ctx: SeoContext, input: { configId: string; trackingKeywordId: string; sinceDays?: number }) {
   const config = await getConfig(ctx, input.configId);
   const since = new Date(Date.now() - Math.min(730, input.sinceDays ?? 365) * 86_400_000);
-  return db
-    .select({ device: seoRankSnapshots.device, checkedAt: seoRankSnapshots.checkedAt, position: seoRankSnapshots.position })
+  const competitors = (await getTrackedCompetitorBrands(ctx.projectId)).brands.map((c) => ({ ...c, domain: normHost(c.domain) }));
+  const domains = competitors.map((c) => c.domain);
+  const points = await db
+    .select({
+      device: seoRankSnapshots.device,
+      checkedAt: seoRankSnapshots.checkedAt,
+      position: seoRankSnapshots.position,
+      url: seoRankSnapshots.url,
+      serpHosts: (domains.length ? hostsOf(sql`${seoRankSnapshots.serpHosts}`, domains) : sql`NULL`).mapWith((v) => v as Record<string, SerpHostEntry> | null),
+    })
     .from(seoRankSnapshots)
     .innerJoin(seoRankRuns, eq(seoRankRuns.id, seoRankSnapshots.runId))
     .where(
@@ -634,6 +768,7 @@ export async function getRankKeywordHistory(ctx: SeoContext, input: { configId: 
       ),
     )
     .orderBy(asc(seoRankSnapshots.checkedAt));
+  return { points, brands: competitors };
 }
 
 /** Position distribution per completed full run for one device (x = run startedAt). */

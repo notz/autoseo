@@ -230,6 +230,20 @@ function visibilityOf(rows: ScorecardRow[], key: "position" | "previousPosition"
   return (weighted / (totalVolume * 0.28)) * 100;
 }
 
+export type CompetitorMetric = "visibility" | "avgPosition" | "top3" | "top10";
+export type PositionMetrics = Record<CompetitorMetric, number | null>;
+
+/** Per-brand metrics of one check over its keywords (visibility: see `visibilityOf`; avgPosition over ranked keywords only). */
+export function positionMetrics(rows: { searchVolume: number | null; position: number | null }[]): PositionMetrics {
+  const ranked = rows.filter((r) => r.position != null) as { position: number }[];
+  return {
+    visibility: visibilityOf(rows.map((r) => ({ ...r, previousPosition: null })), "position"),
+    avgPosition: ranked.length ? ranked.reduce((s, r) => s + r.position, 0) / ranked.length : null,
+    top3: ranked.filter((r) => r.position <= 3).length,
+    top10: ranked.filter((r) => r.position <= 10).length,
+  };
+}
+
 export type Scorecards = {
   visibility: number | null;
   visibilityDelta: number | null;

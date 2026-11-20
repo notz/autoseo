@@ -3,6 +3,8 @@
  * Port of open-seo `server/lib/dataforseo/serp.ts`. Pure.
  */
 
+import type { SerpHostEntry } from "@/server/db/schema/seo";
+
 export const SERP_LIVE_PATH = "/v3/serp/google/organic/live/advanced";
 export const SERP_TASK_POST_PATH = "/v3/serp/google/organic/task_post";
 export const SERP_TASKS_READY_PATH = "/v3/serp/google/organic/tasks_ready";
@@ -11,6 +13,8 @@ export const serpTaskGetPath = (taskId: string) => `/v3/serp/google/organic/task
 /** Default depth for the SERP analysis panel (~5 credits); "Load top 100" re-crawls at 100. */
 export const SERP_ANALYSIS_DEPTH = 20;
 export const MAX_TASKS_PER_POST = 100;
+
+export type { SerpHostEntry };
 
 /** DataForSEO bills SERPs in pages of 10; depth outside 10-100 is rejected. */
 export function clampSerpDepth(depth: number): number {
@@ -97,6 +101,7 @@ export type RankCheckResult = {
   position: number | null;
   url: string | null;
   serpFeatures: string[];
+  serpHosts: Record<string, SerpHostEntry>;
 };
 
 type RankLocation = { locationCode: number; languageCode: string; locationName?: string | null };
@@ -151,6 +156,43 @@ export function organicHost(i: SerpLiveItem): string | undefined {
   return i.breadcrumb?.match(/^(?:https?:\/\/)?([^\s/›]+)/)?.[1] ?? i.domain ?? undefined;
 }
 
+/** Whole SERP by host: best organic position + URL, and the feature types (non-organic items) the host appears in. */
+export function buildSerpHosts(items: SerpLiveItem[]): Record<string, SerpHostEntry> {
+  const hosts: Record<string, SerpHostEntry> = {};
+  for (const i of items) {
+    const host = organicHost(i)?.toLowerCase().replace(/^www\./, "");
+    if (!host || !i.type) continue;
+    const e = (hosts[host] ??= { p: null });
+    if (i.type === "organic") {
+      const p = i.rank_group ?? i.rank_absolute ?? null;
+      if (p != null && (e.p == null || p < e.p)) {
+        e.p = p;
+        if (i.url) e.u = i.url;
+      }
+    } else if (!e.f?.includes(i.type)) (e.f ??= []).push(i.type);
+  }
+  return hosts;
+}
+
+/** Merged entry for a domain and its subdomains (best position + its URL, union of features), or null if absent. */
+export function competitorEntry(hosts: Record<string, SerpHostEntry> | null | undefined, domain: string): SerpHostEntry | null {
+  if (!hosts) return null;
+  const d = domain.toLowerCase().replace(/^www\./, "");
+  let out: SerpHostEntry | null = null;
+  for (const [host, e] of Object.entries(hosts)) {
+    if (host !== d && !host.endsWith(`.${d}`)) continue;
+    out ??= { p: null };
+    if (e.p != null && (out.p == null || e.p < out.p)) {
+      out.p = e.p;
+      out.u = e.u;
+    }
+    for (const f of e.f ?? []) if (!out.f?.includes(f)) (out.f ??= []).push(f);
+  }
+  return out;
+}
+
+export const competitorPosition = (hosts: Record<string, SerpHostEntry> | null | undefined, domain: string): number | null => competitorEntry(hosts, domain)?.p ?? null;
+
 /**
  * First organic item whose domain equals the target or is a subdomain of it.
  * position = rank_group (organic-only rank) ?? rank_absolute. serpFeatures = unique item types.
@@ -173,6 +215,7 @@ export function buildRankCheckResult(
     position: match ? (match.rank_group ?? match.rank_absolute ?? null) : null,
     url: match?.url ?? null,
     serpFeatures: [...new Set(list.map((i) => i.type).filter((t): t is string => Boolean(t)))],
+    serpHosts: buildSerpHosts(list),
   };
 }
 

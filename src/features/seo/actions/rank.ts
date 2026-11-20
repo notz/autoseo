@@ -8,6 +8,7 @@ import {
   enqueueTrackingKeywordMetricsRefresh,
   estimateRankTrackerCost,
   getLatestRankRun,
+  getRankCompetitorData,
   getRankConfigTrend,
   getRankKeywordHistory,
   getRankPositionMatrix,
@@ -65,6 +66,10 @@ export async function refreshTrackingMetricsAction(projectId: string, configId: 
 
 export async function getKeywordHistoryAction(projectId: string, configId: string, trackingKeywordId: string, sinceDays: number) {
   return seoAction(projectId, undefined, (ctx) => getRankKeywordHistory(ctx, { configId, trackingKeywordId, sinceDays }));
+}
+
+export async function getRankCompetitorDataAction(projectId: string, configId: string, d: "desktop" | "mobile", period: ComparePeriod) {
+  return seoAction(projectId, undefined, (ctx) => getRankCompetitorData(ctx, configId, device.parse(d), period));
 }
 
 export async function getConfigTrendAction(projectId: string, configId: string, d: "desktop" | "mobile", sinceDays: number) {

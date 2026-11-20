@@ -67,6 +67,7 @@ export {
   getLatestRankRun,
   getRankTrackingResults,
   getRankKeywordHistory,
+  getRankCompetitorData,
   getRankConfigTrend,
   getRankPositionMatrix,
   enqueueTrackingKeywordMetricsRefresh,
@@ -77,6 +78,7 @@ export {
   type RankConfigSummary,
   type RankRunView,
   type RankTrackingRow,
+  type RankCompetitorData,
   type RankCheckTriggerResult,
 } from "./rank-tracking";
 export { executeRankCheck, collectQueuedRound, refreshTrackingKeywordMetrics, runScheduledRankChecks } from "./rank-engine";

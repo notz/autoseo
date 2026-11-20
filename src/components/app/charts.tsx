@@ -80,6 +80,7 @@ export function TrendChart({
   stacked,
   legend,
   domain,
+  reversed,
   markers,
   className,
   xFormatter = shortDate,
@@ -95,6 +96,8 @@ export function TrendChart({
   stacked?: boolean;
   legend?: boolean;
   domain?: [number | "auto", number | "auto"];
+  /** Flip the left axis (e.g. rank positions: 1 on top). */
+  reversed?: boolean;
   markers?: { x: string; label: string; color?: string }[];
   className?: string;
   xFormatter?: (v: string) => string;
@@ -124,6 +127,7 @@ export function TrendChart({
           width={format === "currency" ? 56 : 42}
           tickFormatter={(v) => fmt(v, format === "number" ? "compact" : format)}
           domain={domain ?? (format === "percent" ? [0, 100] : ["auto", "auto"])}
+          reversed={reversed}
         />
         {hasRight && (
           <YAxis
